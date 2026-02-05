@@ -260,7 +260,7 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>🔧 CURL Cleaner</h1>
+            <h1>🔧 CURL Cleaner v1.3</h1>
             <button class="theme-toggle" onclick="toggleTheme()" title="Переключить тему">🌙</button>
         </div>
 
@@ -456,22 +456,29 @@
             return { url, headers, body, bodyFlag };
         }
 
+        function shellSingleQuote(value) {
+            // Безопасно оборачиваем в одинарные кавычки для bash/zsh.
+            // Пример: foo'bar -> 'foo'\''bar'
+            return `'${String(value).replace(/'/g, `'\\''`)}'`;
+        }
+
         function formatCurl(url, headers, body, bodyFlag) {
-            let result = `curl '${url}' \\`;
-            
+            const parts = [];
+
+            parts.push(`curl ${shellSingleQuote(url)}`);
+
             for (const header of headers) {
-                result += `\n  -H '${header.name}: ${header.value}' \\`;
+                parts.push(`  -H ${shellSingleQuote(`${header.name}: ${header.value}`)}`);
             }
-            
+
             if (body) {
                 const flag = bodyFlag || '-d';
-                result += `\n  ${flag} '${body}'`;
-            } else {
-                // Удаляем последний backslash если нет body
-                result = result.slice(0, -3);
+                parts.push(`  ${flag} ${shellSingleQuote(body)}`);
             }
-            
-            return result;
+
+            return parts
+                .map((part, index) => (index < parts.length - 1 ? `${part} \\` : part))
+                .join('\n');
         }
 
         function processCurl() {
