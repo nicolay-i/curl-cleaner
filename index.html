@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -376,12 +375,22 @@
             return false;
         }
 
+        function extractCurlStringArg(text) {
+            const trimmed = text.trim();
+            const match = trimmed.match(/^(['"])([\s\S]*)\1$/);
+            if (match) {
+                return match[2];
+            }
+            return trimmed;
+        }
+
         function parseCurl(curlText) {
             const lines = curlText.split('\n').map(l => l.trim());
             
             let url = '';
             const headers = [];
             let body = '';
+            let bodyFlag = '';
             
             let inMultilineString = false;
             let multilineValue = '';
@@ -421,20 +430,33 @@
                     continue;
                 }
                 
+                // Обрабатываем body флаги (-d / --data-raw)
+                if (line.startsWith('--data-raw')) {
+                    const rest = line.replace(/^--data-raw\s+/, '');
+                    const value = extractCurlStringArg(rest);
+                    if (value) {
+                        body = value;
+                        bodyFlag = '--data-raw';
+                    }
+                    continue;
+                }
+
                 // Обрабатываем -d флаг (body)
                 if (line.startsWith('-d')) {
-                    const match = line.match(/-d\s+(['"])(.*?)\1/);
-                    if (match) {
-                        body = match[2];
+                    const rest = line.replace(/^-d\s+/, '');
+                    const value = extractCurlStringArg(rest);
+                    if (value) {
+                        body = value;
+                        bodyFlag = '-d';
                     }
                     continue;
                 }
             }
             
-            return { url, headers, body };
+            return { url, headers, body, bodyFlag };
         }
 
-        function formatCurl(url, headers, body) {
+        function formatCurl(url, headers, body, bodyFlag) {
             let result = `curl '${url}' \\`;
             
             for (const header of headers) {
@@ -442,7 +464,8 @@
             }
             
             if (body) {
-                result += `\n  -d '${body}'`;
+                const flag = bodyFlag || '-d';
+                result += `\n  ${flag} '${body}'`;
             } else {
                 // Удаляем последний backslash если нет body
                 result = result.slice(0, -3);
@@ -460,14 +483,14 @@
             }
             
             try {
-                const { url, headers, body } = parseCurl(input);
+                const { url, headers, body, bodyFlag } = parseCurl(input);
                 
                 if (!url) {
                     showStatus('Не удалось найти URL в CURL запросе', true);
                     return;
                 }
                 
-                const output = formatCurl(url, headers, body);
+                const output = formatCurl(url, headers, body, bodyFlag);
                 const outputField = document.getElementById('outputCurl');
                 outputField.value = output;
                 
