@@ -260,7 +260,7 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>🔧 CURL Cleaner v1.3</h1>
+            <h1>🔧 CURL Cleaner v1.4</h1>
             <button class="theme-toggle" onclick="toggleTheme()" title="Переключить тему">🌙</button>
         </div>
 
@@ -391,6 +391,7 @@
             const headers = [];
             let body = '';
             let bodyFlag = '';
+            let method = '';
             
             let inMultilineString = false;
             let multilineValue = '';
@@ -411,6 +412,15 @@
                 
                 // Удаляем экранирующие слэши в конце
                 line = line.replace(/\s*\\+\s*$/, '');
+
+                // Обрабатываем метод (-X / --request)
+                if (line.startsWith('-X') || line.startsWith('--request')) {
+                    const match = line.match(/^(?:-X|--request)\s+(['"])?([A-Za-z]+)\1?\s*$/);
+                    if (match) {
+                        method = match[2].toUpperCase();
+                    }
+                    continue;
+                }
                 
                 // Обрабатываем -H флаг
                 if (line.startsWith('-H')) {
@@ -453,7 +463,7 @@
                 }
             }
             
-            return { url, headers, body, bodyFlag };
+            return { url, headers, body, bodyFlag, method };
         }
 
         function shellSingleQuote(value) {
@@ -462,23 +472,29 @@
             return `'${String(value).replace(/'/g, `'\\''`)}'`;
         }
 
-        function formatCurl(url, headers, body, bodyFlag) {
+        function formatCurl(url, headers, body, bodyFlag, method) {
             const parts = [];
 
             parts.push(`curl ${shellSingleQuote(url)}`);
 
+            // Postman импорт иногда не выводит POST автоматически из --data-raw,
+            // поэтому делаем метод явным, если есть body.
+            const effectiveMethod = (method || (body ? 'POST' : '')).trim();
+            if (effectiveMethod) {
+                parts.push(`-X ${effectiveMethod}`);
+            }
+
             for (const header of headers) {
-                parts.push(`  -H ${shellSingleQuote(`${header.name}: ${header.value}`)}`);
+                parts.push(`-H ${shellSingleQuote(`${header.name}: ${header.value}`)}`);
             }
 
             if (body) {
                 const flag = bodyFlag || '-d';
-                parts.push(`  ${flag} ${shellSingleQuote(body)}`);
+                parts.push(`${flag} ${shellSingleQuote(body)}`);
             }
 
-            return parts
-                .map((part, index) => (index < parts.length - 1 ? `${part} \\` : part))
-                .join('\n');
+            // Однострочный curl: лучше импортируется в Postman и не зависит от CRLF.
+            return parts.join(' ');
         }
 
         function processCurl() {
@@ -490,14 +506,14 @@
             }
             
             try {
-                const { url, headers, body, bodyFlag } = parseCurl(input);
+                const { url, headers, body, bodyFlag, method } = parseCurl(input);
                 
                 if (!url) {
                     showStatus('Не удалось найти URL в CURL запросе', true);
                     return;
                 }
                 
-                const output = formatCurl(url, headers, body, bodyFlag);
+                const output = formatCurl(url, headers, body, bodyFlag, method);
                 const outputField = document.getElementById('outputCurl');
                 outputField.value = output;
                 
