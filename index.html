@@ -260,7 +260,7 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>🔧 CURL Cleaner v1.4</h1>
+            <h1>🔧 CURL Cleaner v1.5</h1>
             <button class="theme-toggle" onclick="toggleTheme()" title="Переключить тему">🌙</button>
         </div>
 
@@ -375,94 +375,190 @@
             return false;
         }
 
-        function extractCurlStringArg(text) {
-            const trimmed = text.trim();
-            const match = trimmed.match(/^(['"])([\s\S]*)\1$/);
-            if (match) {
-                return match[2];
+        // Флаги без аргументов (Postman / Chrome / curl -L и т.п.)
+        const booleanFlags = new Set([
+            '-L', '--location', '--location-trusted',
+            '--compressed', '-k', '--insecure',
+            '-v', '--verbose', '-s', '--silent', '-S', '--show-error',
+            '-i', '--include', '-I', '--head', '-G', '--get',
+            '-N', '--no-buffer', '--http1.1', '--http2', '--http2-prior-knowledge',
+            '--fail', '-f', '--raw', '--remote-name', '-O'
+        ]);
+
+        // Флаги с одним аргументом, которые нам не нужны (просто пропускаем)
+        const skipArgFlags = new Set([
+            '-A', '--user-agent',
+            '-b', '--cookie',
+            '-e', '--referer',
+            '-u', '--user',
+            '-o', '--output',
+            '-m', '--max-time',
+            '--connect-timeout',
+            '--proxy', '-x',
+            '-w', '--write-out',
+            '--cacert', '--capath',
+            '-E', '--cert', '--key'
+        ]);
+
+        function tokenizeCurl(curlText) {
+            // Склеиваем строки с \ в конце (формат Postman / DevTools)
+            const joined = String(curlText)
+                .replace(/\r\n/g, '\n')
+                .replace(/\\\s*\n/g, ' ')
+                .trim();
+
+            const tokens = [];
+            let i = 0;
+
+            while (i < joined.length) {
+                while (i < joined.length && /\s/.test(joined[i])) i++;
+                if (i >= joined.length) break;
+
+                const ch = joined[i];
+
+                if (ch === "'" || ch === '"') {
+                    const quote = ch;
+                    i++;
+                    let value = '';
+                    while (i < joined.length && joined[i] !== quote) {
+                        // В двойных кавычках учитываем простые escape
+                        if (quote === '"' && joined[i] === '\\' && i + 1 < joined.length) {
+                            value += joined[i + 1];
+                            i += 2;
+                            continue;
+                        }
+                        value += joined[i++];
+                    }
+                    if (i < joined.length) i++; // закрывающая кавычка
+                    tokens.push(value);
+                    continue;
+                }
+
+                let value = '';
+                while (i < joined.length && !/\s/.test(joined[i])) {
+                    value += joined[i++];
+                }
+                tokens.push(value);
             }
-            return trimmed;
+
+            return tokens;
+        }
+
+        function looksLikeUrl(token) {
+            if (!token) return false;
+            return /^(https?:\/\/|\/\/)/i.test(token) || /^[a-z0-9.-]+\.[a-z]{2,}([/:?]|$)/i.test(token);
+        }
+
+        function addHeaderFromLine(headerLine, headers) {
+            const colonIndex = headerLine.indexOf(':');
+            if (colonIndex < 0) return;
+            const headerName = headerLine.substring(0, colonIndex).trim();
+            const headerValue = headerLine.substring(colonIndex + 1).trim();
+            if (headerName && shouldKeepHeader(headerName)) {
+                headers.push({ name: headerName, value: headerValue });
+            }
         }
 
         function parseCurl(curlText) {
-            const lines = curlText.split('\n').map(l => l.trim());
-            
+            const tokens = tokenizeCurl(curlText);
             let url = '';
             const headers = [];
             let body = '';
             let bodyFlag = '';
             let method = '';
-            
-            let inMultilineString = false;
-            let multilineValue = '';
-            let multilineKey = '';
-            
-            for (let line of lines) {
-                // Пропускаем пустые и curl команду
-                if (!line || line.startsWith('curl ')) {
-                    // Извлекаем URL
-                    if (line.startsWith('curl ')) {
-                        const match = line.match(/curl\s+(['"])(.*?)\1/);
-                        if (match) {
-                            url = match[2];
-                        }
-                    }
-                    continue;
-                }
-                
-                // Удаляем экранирующие слэши в конце
-                line = line.replace(/\s*\\+\s*$/, '');
 
-                // Обрабатываем метод (-X / --request)
-                if (line.startsWith('-X') || line.startsWith('--request')) {
-                    const match = line.match(/^(?:-X|--request)\s+(['"])?([A-Za-z]+)\1?\s*$/);
-                    if (match) {
-                        method = match[2].toUpperCase();
-                    }
-                    continue;
-                }
-                
-                // Обрабатываем -H флаг
-                if (line.startsWith('-H')) {
-                    const match = line.match(/-H\s+(['"])(.*?)\1/);
-                    if (match) {
-                        const headerLine = match[2];
-                        const colonIndex = headerLine.indexOf(':');
-                        if (colonIndex > -1) {
-                            const headerName = headerLine.substring(0, colonIndex).trim();
-                            const headerValue = headerLine.substring(colonIndex + 1).trim();
-                            
-                            if (shouldKeepHeader(headerName)) {
-                                headers.push({ name: headerName, value: headerValue });
-                            }
-                        }
-                    }
-                    continue;
-                }
-                
-                // Обрабатываем body флаги (-d / --data-raw)
-                if (line.startsWith('--data-raw')) {
-                    const rest = line.replace(/^--data-raw\s+/, '');
-                    const value = extractCurlStringArg(rest);
-                    if (value) {
-                        body = value;
-                        bodyFlag = '--data-raw';
-                    }
-                    continue;
-                }
-
-                // Обрабатываем -d флаг (body)
-                if (line.startsWith('-d')) {
-                    const rest = line.replace(/^-d\s+/, '');
-                    const value = extractCurlStringArg(rest);
-                    if (value) {
-                        body = value;
-                        bodyFlag = '-d';
-                    }
-                    continue;
-                }
+            let i = 0;
+            if (tokens[0] && /^curl(\.exe)?$/i.test(tokens[0])) {
+                i = 1;
             }
-            
+
+            while (i < tokens.length) {
+                const token = tokens[i];
+
+                // --header=Value или -H=Value
+                if (/^--header=/i.test(token) || /^-H=/i.test(token)) {
+                    addHeaderFromLine(token.replace(/^--header=|^-H=/i, ''), headers);
+                    i++;
+                    continue;
+                }
+
+                if (token === '-H' || token === '--header') {
+                    addHeaderFromLine(tokens[++i] || '', headers);
+                    i++;
+                    continue;
+                }
+
+                if (token === '-X' || token === '--request') {
+                    method = String(tokens[++i] || '').toUpperCase();
+                    i++;
+                    continue;
+                }
+
+                if (
+                    token === '-d' || token === '--data' || token === '--data-raw' ||
+                    token === '--data-binary' || token === '--data-urlencode' || token === '--data-ascii'
+                ) {
+                    bodyFlag = token;
+                    body = tokens[++i] || '';
+                    i++;
+                    continue;
+                }
+
+                if (/^--data(-raw|-binary|-urlencode|-ascii)?=/i.test(token) || /^-d=/i.test(token)) {
+                    const eq = token.indexOf('=');
+                    bodyFlag = token.slice(0, eq);
+                    body = token.slice(eq + 1);
+                    i++;
+                    continue;
+                }
+
+                if (token === '--url') {
+                    if (!url) url = tokens[++i] || '';
+                    else i++;
+                    i++;
+                    continue;
+                }
+
+                if (/^--url=/i.test(token)) {
+                    if (!url) url = token.slice(token.indexOf('=') + 1);
+                    i++;
+                    continue;
+                }
+
+                if (booleanFlags.has(token)) {
+                    i++;
+                    continue;
+                }
+
+                // Неизвестные/служебные флаги с аргументом — пропускаем пару
+                if (token.startsWith('-') && skipArgFlags.has(token)) {
+                    i += 2;
+                    continue;
+                }
+
+                if (token.startsWith('--') && token.includes('=')) {
+                    i++;
+                    continue;
+                }
+
+                if (token.startsWith('-')) {
+                    // Флаг с возможным аргументом: если следующий токен не флаг и не URL — пропуск
+                    const next = tokens[i + 1];
+                    if (next && !next.startsWith('-') && !looksLikeUrl(next)) {
+                        i += 2;
+                    } else {
+                        i++;
+                    }
+                    continue;
+                }
+
+                // Позиционный аргумент — URL
+                if (!url) {
+                    url = token;
+                }
+                i++;
+            }
+
             return { url, headers, body, bodyFlag, method };
         }
 
